@@ -1,0 +1,116 @@
+{
+  "info": {
+    "name": "Petsfolio Insurance Assistant",
+    "_postman_id": "7f02b084-e9b2-46c7-a77c-57c2afde7c34",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "token", "value": "" },
+    { "key": "chat_id", "value": "1" },
+    { "key": "plan_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Auth - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@petsfolio.local\",\n  \"password\": \"Password123!\",\n  \"preferred_locale\": \"en\"\n}"
+        },
+        "url": "{{base_url}}/api/auth/login"
+      }
+    },
+    {
+      "name": "Auth - Me",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{base_url}}/api/auth/me"
+      }
+    },
+    {
+      "name": "Chat - Send Message",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"chat_id\": {{chat_id}},\n  \"locale\": \"en\",\n  \"message\": \"Recommend the best dog plan for illness cover and faster claims.\"\n}"
+        },
+        "url": "{{base_url}}/api/chat"
+      }
+    },
+    {
+      "name": "Chats - List",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{base_url}}/api/chats"
+      }
+    },
+    {
+      "name": "Chats - Detail",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{base_url}}/api/chats/{{chat_id}}"
+      }
+    },
+    {
+      "name": "Admin - List Plans",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": "{{base_url}}/api/admin/plans"
+      }
+    },
+    {
+      "name": "Admin - Update Plan",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name_en\": \"Care Plus Dog\",\n  \"name_hi\": \"केयर प्लस डॉग\",\n  \"price_monthly\": 49,\n  \"annual_limit\": 11000,\n  \"deductible\": 200,\n  \"reimbursement_percent\": 80,\n  \"waiting_period_days\": 10\n}"
+        },
+        "url": "{{base_url}}/api/admin/plans/{{plan_id}}"
+      }
+    },
+    {
+      "name": "Admin - Upload Document",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "language", "value": "en", "type": "text" },
+            { "key": "file", "type": "file", "src": "" }
+          ]
+        },
+        "url": "{{base_url}}/api/admin/documents/upload"
+      }
+    }
+  ]
+}

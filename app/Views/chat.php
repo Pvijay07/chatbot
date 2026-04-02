@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title><?= lang('Chat.title') ?></title>
+    <title>Petsfolio AI Assistant v3</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -553,6 +553,9 @@
                         if (!window._isDone) window._isDone = {};
                         window._isDone[d.id] = true;
 
+                        // Re-enable send button
+                        sendBtn.disabled = false;
+
                         // Final cleanup check: if the content was JSON, we might need a jump update
                         // after the playback queue finishes. ThePlayback loop handles it naturally,
                         // but let's ensure the final text is clean.
@@ -570,6 +573,9 @@
                                 } catch (e) {}
                             }
                         }, 500);
+                    } else {
+                        // Fallback disable toggle
+                        sendBtn.disabled = false;
                     }
                     return;
                 }
@@ -602,7 +608,13 @@
 
         function doSend() {
             const text = inputEl.value.trim();
-            if (!text) return;
+            if (!text || sendBtn.disabled) return;
+
+            // Disable UI and clear immediately
+            sendBtn.disabled = true;
+            inputEl.value = '';
+            inputEl.style.height = '24px';
+
             const id = Date.now().toString(36);
             addMessage({
                 who: 'user',
@@ -618,13 +630,16 @@
             });
 
             if (conn && conn.readyState === WebSocket.OPEN) {
-                conn.send(payload);
+                try {
+                    conn.send(payload);
+                } catch (err) {
+                    addMessage('Error: Failed to send message (' + err.message + ')');
+                    sendBtn.disabled = false;
+                }
             } else {
                 addMessage('Error: Server connection lost');
+                sendBtn.disabled = false;
             }
-
-            inputEl.value = '';
-            inputEl.style.height = '24px';
         }
 
         sendBtn.addEventListener('click', doSend);
@@ -653,12 +668,14 @@
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
+
+            const question = inputEl.value.trim() || 'Analyze this document';
             addMessage(`Uploading document: ${file.name}...`);
+            sendBtn.disabled = true;
 
             const formData = new FormData();
-            formData.append('file', file);
-            const question = prompt('Ask a question about the document (or leave empty):') || '';
-            if (question) formData.append('question', question);
+            formData.append('file', file); // Use 'file' as expected by DocumentController
+            formData.append('question', question);
 
             try {
                 const res = await fetch('<?= ('http://localhost/chatbot/public/api/document/upload') ?>', {
@@ -667,16 +684,13 @@
                 });
                 const data = await res.json();
                 if (data.success) {
-                    addMessage(`Document uploaded: ${data.filename}`);
-                    if (data.text) addMessage(`Extracted text preview: \n\n${data.text.substring(0, 300)}...`);
-                    if (data.analysis) {
-                        const id = Date.now().toString(36);
-                        addMessage({
-                            who: 'assistant',
-                            text: data.analysis,
-                            id: id
-                        });
-                    }
+                    const id = Date.now().toString(36);
+                    const analysisText = data.analysis || `Extracted text (${data.size} chars)`;
+                    addMessage({
+                        who: 'assistant',
+                        text: analysisText,
+                        id: id
+                    });
                 } else {
                     addMessage(`Upload error: ${data.message || 'Unknown error'}`);
                 }
@@ -684,6 +698,9 @@
                 addMessage(`Upload failed: ${err.message}`);
             }
             fileInput.value = '';
+            inputEl.value = '';
+            inputEl.style.height = '24px';
+            sendBtn.disabled = false;
         });
     </script>
 </body>

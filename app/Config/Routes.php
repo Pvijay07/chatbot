@@ -6,15 +6,28 @@ use CodeIgniter\Router\RouteCollection;
  * @var RouteCollection $routes
  */
 $routes->get('/', 'Home::index');
-$routes->post('api/chatbot/query', 'Api\ChatbotController::query');
-// Ollama chat endpoint
-$routes->post('api/chat', 'Api\ChatController::chat');
-$routes->post('api/voice/process', 'Api\VoiceController::process');
-$routes->post('api/document/upload', 'Api\DocumentController::upload');
+$routes->get('chat', 'Home::index');
+$routes->get('admin', 'Home::index');
 
-// Chat UI and language switch
-$routes->get('chat', 'Chat::index');
-$routes->post('language', 'Chat::setLanguage');
+$routes->group('api', static function ($routes) {
+    $routes->post('auth/register', 'Api\AuthController::register');
+    $routes->post('auth/login', 'Api\AuthController::login');
 
-// Local push endpoint (for app to forward messages to WebSocket server)
-$routes->post('push', 'Push::index');
+    $routes->get('auth/me', 'Api\AuthController::me', ['filter' => 'jwt']);
+    $routes->get('plans', 'Api\PlanController::index');
+
+    $routes->get('chats', 'Api\ChatController::index');
+    $routes->post('chats', 'Api\ChatController::create');
+    $routes->get('chats/(:num)', 'Api\ChatController::show/$1');
+    $routes->post('chat', 'Api\ChatController::chat');
+    $routes->post('chat/stream', 'Api\ChatController::stream');
+
+    $routes->get('admin/plans', 'Api\AdminPlanController::index', ['filter' => 'authadmin']);
+    $routes->post('admin/plans', 'Api\AdminPlanController::create', ['filter' => 'authadmin']);
+    $routes->put('admin/plans/(:num)', 'Api\AdminPlanController::update/$1', ['filter' => 'authadmin']);
+    $routes->delete('admin/plans/(:num)', 'Api\AdminPlanController::delete/$1', ['filter' => 'authadmin']);
+
+    $routes->get('admin/documents', 'Api\AdminDocumentController::index', ['filter' => 'authadmin']);
+    $routes->post('admin/documents/upload', 'Api\AdminDocumentController::upload', ['filter' => 'authadmin']);
+    $routes->post('document/upload', 'Api\DocumentController::upload');
+});

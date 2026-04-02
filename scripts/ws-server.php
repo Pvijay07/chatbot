@@ -1,150 +1,73 @@
 <?php
-// Simple Ratchet WebSocket server for broadcasting chat messages.
-// Requires: cboden/ratchet and react/socket via composer.
+// Petsfolio realtime WebSocket server.
+// Start with: php scripts/ws-server.php
 
-use Ratchet\MessageComponentInterface;
+use App\Models\UserModel;
+use CodeIgniter\Boot;
+use Config\Paths;
 use Ratchet\ConnectionInterface;
+use Ratchet\MessageComponentInterface;
 
-require __DIR__ . '/../vendor/autoload.php';
+define('FCPATH', __DIR__ . '/../public/');
+chdir(FCPATH);
+
+require FCPATH . '../app/Config/Paths.php';
+
+$paths = new Paths();
+
+require $paths->systemDirectory . '/Boot.php';
+
+if (!defined('ENVIRONMENT')) {
+    $environment = $_ENV['CI_ENVIRONMENT'] ?? $_SERVER['CI_ENVIRONMENT'] ?? getenv('CI_ENVIRONMENT') ?: 'production';
+    define('ENVIRONMENT', $environment);
+}
+
+Boot::bootConsole($paths);
 
 class BroadcastServer implements MessageComponentInterface
 {
-    protected $clients;
+    protected \SplObjectStorage $clients;
+    protected \App\Services\AssistantService $assistant;
+    protected \App\Services\JwtService $jwt;
+    protected UserModel $users;
 
     public function __construct()
     {
-        $this->clients = new \SplObjectStorage;
-        echo "WebSocket server started\n";
+        $this->clients = new \SplObjectStorage();
+        $this->assistant = service('assistant');
+        $this->jwt = service('jwt');
+        $this->users = new UserModel();
+
+        echo "Petsfolio WebSocket server started\n";
     }
 
     public function onOpen(ConnectionInterface $conn)
     {
         $this->clients->attach($conn);
-        $conn->history = []; // Initialize history for this connection
         echo "New connection ({$conn->resourceId})\n";
     }
 
     public function onMessage(ConnectionInterface $from, $msg)
     {
-        // Expect JSON messages. Two supported formats:
-        // {"type":"broadcast","message":"..."} - broadcast to others
-        // {"type":"ask","prompt":"..."} - ask LLM and stream tokens back
         $data = json_decode($msg, true) ?: [];
-
         $type = $data['type'] ?? null;
+
         if ($type === 'ask' && !empty($data['prompt'])) {
-            $prompt = $data['prompt'];
-            $id = $data['id'] ?? null;
-            $locale = $data['locale'] ?? 'en';
-
-            // Simple local handling for short greetings to avoid off-topic LLM answers
-            $trimmed = trim(mb_substr($prompt, 0, 64));
-            if (preg_match('/^\s*(hi|hello|hey|hola|hallo|yo|howdy)[\!\.]*$/i', $trimmed) && mb_strlen($trimmed) < 12) {
-                $greetings = [
-                    'en' => 'Hi — I can help with pet insurance questions. How can I assist you?',
-                    'es' => 'Hola — Puedo ayudar con preguntas sobre seguros para mascotas. ¿En qué puedo ayudarte?',
-                    'de' => 'Hallo — Ich kann bei Fragen zur Tierkrankenversicherung helfen. Wie kann ich Ihnen helfen?',
-                    'fr' => 'Salut — Je peux aider avec des questions sur l\'assurance pour animaux. Comment puis-je vous aider?',
-                    'te' => 'హాయ్ — నేను పెట్ ఇన్సూరెన్స్ సంబంధమైన ప్రశ్నలలో సహాయం చేయగలను. నేను ఎలా సహాయపడగలను?',
-                    'pt' => 'Oi — Posso ajudar com perguntas sobre seguro para animais de estimação. Como posso ajudar?'
-                ];
-                $reply = $greetings[$locale] ?? $greetings['en'];
-
-                // Add user message to history
-                $from->history[] = ['role' => 'user', 'content' => $prompt];
-
-                // Send reply and done
-                $payload = ['type' => 'partial', 'text' => $reply];
-                if ($id) $payload['id'] = $id;
-                try { $from->send(json_encode($payload)); } catch (\Exception $_) {}
-
-                $from->history[] = ['role' => 'assistant', 'content' => $reply];
-                try { $from->send(json_encode(['type' => 'done'] + ($id ? ['id' => $id] : []))); } catch (\Exception $_) {}
-                return;
-            }
-
-            // Add user message to history
-            $from->history[] = ['role' => 'user', 'content' => $prompt];
-
-            // Keep history lean (optional: last 10 messages)
-            if (count($from->history) > 20) {
-                array_shift($from->history);
-                array_shift($from->history);
-            }
-
-            $this->streamLlmResponse($from, $from->history, $id, $locale);
+            $this->handleAsk($from, $data);
             return;
         }
 
-        // fallback: broadcast string or message field
-        $text = is_array($data) && isset($data['message']) ? $data['message'] : $msg;
+        $text = is_array($data) && isset($data['message']) ? $data['message'] : (string) $msg;
 
         foreach ($this->clients as $client) {
-            if ($from !== $client) {
-                $client->send(json_encode(['type' => 'broadcast', 'message' => $text]));
+            if ($from === $client) {
+                continue;
             }
-        }
-    }
 
-    /**
-     * Broadcast raw payload to all connected clients.
-     * Accepts string or array.
-     */
-    public function broadcast($payload)
-    {
-        $msg = is_string($payload) ? $payload : json_encode($payload);
-        foreach ($this->clients as $client) {
-            try {
-                $client->send($msg);
-            } catch (\Exception $_) {
-            }
-        }
-    }
-
-    protected function streamLlmResponse(ConnectionInterface $client, array $history, $id = null, $locale = 'en')
-    {
-        // Use application LlmService to handle streaming logic.
-        try {
-            $svc = new \App\Services\LlmService();
-            $fullResponse = "";
-
-            $svc->askStream(
-                $history,
-                $locale,
-                function ($chunk) use ($client, $id, &$fullResponse) {
-                    $fullResponse .= $chunk;
-                    $payload = ['type' => 'partial', 'text' => $chunk];
-                    if ($id) $payload['id'] = $id;
-                    try {
-                        $client->send(json_encode($payload));
-                    } catch (\Exception $_) {
-                    }
-                },
-                function ($err = null) use ($client, $id, &$fullResponse) {
-                    // When done, save assistant response to history
-                    if (!$err && !empty($fullResponse)) {
-                        $client->history[] = ['role' => 'assistant', 'content' => $fullResponse];
-                    }
-
-                    if ($err) {
-                        try {
-                            $client->send(json_encode(['type' => 'error', 'message' => $err, 'id' => $id]));
-                        } catch (\Exception $_) {
-                        }
-                    }
-                    try {
-                        $done = ['type' => 'done'];
-                        if ($id) $done['id'] = $id;
-                        $client->send(json_encode($done));
-                    } catch (\Exception $_) {
-                    }
-                }
-            );
-        } catch (\Throwable $e) {
-            try {
-                $client->send(json_encode(['type' => 'error', 'message' => $e->getMessage(), 'id' => $id]));
-            } catch (\Exception $_) {
-            }
+            $this->send($client, [
+                'type'    => 'broadcast',
+                'message' => $text,
+            ]);
         }
     }
 
@@ -159,10 +82,115 @@ class BroadcastServer implements MessageComponentInterface
         echo "An error has occurred: {$e->getMessage()}\n";
         $conn->close();
     }
+
+    public function broadcast(string|array $payload): void
+    {
+        foreach ($this->clients as $client) {
+            $this->send($client, $payload);
+        }
+    }
+
+    protected function handleAsk(ConnectionInterface $client, array $data): void
+    {
+        $id = isset($data['id']) && $data['id'] !== '' ? (string) $data['id'] : uniqid('petsfolio_', true);
+        $prompt = trim((string) ($data['prompt'] ?? ''));
+        $locale = (string) ($data['locale'] ?? 'en');
+        $chatId = isset($data['chat_id']) && is_numeric($data['chat_id']) ? (int) $data['chat_id'] : null;
+        $lookupUserId = isset($data['user_id']) && is_numeric($data['user_id']) && (int) $data['user_id'] > 0
+            ? (int) $data['user_id']
+            : null;
+
+        if ($prompt === '') {
+            $this->send($client, [
+                'type'    => 'error',
+                'id'      => $id,
+                'message' => 'Message is required.',
+            ]);
+            $this->send($client, ['type' => 'done', 'id' => $id]);
+            return;
+        }
+
+        try {
+            $user = $this->resolveUser($data, $locale);
+            service('authContext')->setUser($user);
+
+            $result = $this->assistant->handleChatStream(
+                (int) $user['id'],
+                $prompt,
+                function (string $chunk) use ($client, $id): void {
+                    $this->send($client, [
+                        'type' => 'partial',
+                        'id'   => $id,
+                        'text' => $chunk,
+                    ]);
+                },
+                $chatId,
+                $locale,
+                $lookupUserId
+            );
+
+            $this->send($client, [
+                'type' => 'done',
+                'id'   => $id,
+                'chat' => $result['chat'] ?? null,
+            ]);
+        } catch (\Throwable $exception) {
+            log_message('error', 'Petsfolio websocket chat failed: ' . $exception->getMessage());
+
+            $this->send($client, [
+                'type'    => 'error',
+                'id'      => $id,
+                'message' => 'Petsfolio could not process the request.',
+            ]);
+            $this->send($client, ['type' => 'done', 'id' => $id]);
+        }
+    }
+
+    protected function resolveUser(array $data, string $locale): array
+    {
+        $token = trim((string) ($data['token'] ?? ''));
+        if ($token !== '') {
+            $payload = $this->jwt->decode($token);
+            $user = $this->users->find((int) ($payload['sub'] ?? 0));
+
+            if ($user === null) {
+                throw new \RuntimeException('Authenticated user was not found.');
+            }
+
+            return $user;
+        }
+
+        $guestId = isset($data['guest_user_id']) && is_numeric($data['guest_user_id']) ? (int) $data['guest_user_id'] : 0;
+        if ($guestId <= 0) {
+            throw new \RuntimeException('A Petsfolio user context is required for realtime chat.');
+        }
+
+        return [
+            'id'               => $guestId,
+            'name'             => 'Petsfolio Guest',
+            'email'            => null,
+            'role'             => 'user',
+            'preferred_locale' => $locale,
+        ];
+    }
+
+    protected function send(ConnectionInterface $client, string|array $payload): void
+    {
+        $message = is_string($payload)
+            ? $payload
+            : json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if ($message === false) {
+            return;
+        }
+
+        try {
+            $client->send($message);
+        } catch (\Throwable $_) {
+        }
+    }
 }
 
-// Bootstrap Ratchet WebSocket server and a small HTTP push API using ReactPHP
-// WebSocket: 8080, HTTP push endpoint: 8081 (/push)
 $loop = React\EventLoop\Factory::create();
 
 $wsPort = 8080;
@@ -170,9 +198,8 @@ $httpPort = 8081;
 
 $broadcast = new BroadcastServer();
 
-// WebSocket server socket
 $wsSocket = new React\Socket\SocketServer('0.0.0.0:' . $wsPort, [], $loop);
-$wsServer = new Ratchet\Server\IoServer(
+new Ratchet\Server\IoServer(
     new Ratchet\Http\HttpServer(
         new Ratchet\WebSocket\WsServer($broadcast)
     ),
@@ -182,33 +209,30 @@ $wsServer = new Ratchet\Server\IoServer(
 
 echo "WebSocket listening on port {$wsPort}\n";
 
-// HTTP API to push messages into WebSocket clients
-// Requires react/http (composer require react/http)
 try {
     $http = new React\Http\Server(function (Psr\Http\Message\ServerRequestInterface $request) use ($broadcast) {
         $path = $request->getUri()->getPath();
         if ($request->getMethod() !== 'POST' || $path !== '/push') {
-            return new React\Http\Message\Response(404, ['Content-Type' => 'text/plain'], "Not found");
+            return new React\Http\Message\Response(404, ['Content-Type' => 'text/plain'], 'Not found');
         }
 
         $body = (string) $request->getBody();
         $data = json_decode($body, true);
-        // If JSON present and contains an envelope, allow passing it through; otherwise send as message
-        if (is_array($data)) {
-            $payload = $data;
-        } else {
-            $payload = ['type' => 'broadcast', 'message' => $body];
-        }
+        $payload = is_array($data) ? $data : ['type' => 'broadcast', 'message' => $body];
 
         $broadcast->broadcast($payload);
 
-        return new React\Http\Message\Response(200, ['Content-Type' => 'application/json'], json_encode(['ok' => true]));
+        return new React\Http\Message\Response(
+            200,
+            ['Content-Type' => 'application/json'],
+            json_encode(['ok' => true], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
     });
 
     $httpSocket = new React\Socket\SocketServer('0.0.0.0:' . $httpPort, [], $loop);
     $http->listen($httpSocket);
     echo "HTTP push endpoint listening on port {$httpPort} (POST /push)\n";
-} catch (Throwable $e) {
+} catch (\Throwable $e) {
     echo "HTTP push endpoint unavailable (react/http missing): {$e->getMessage()}\n";
     echo "You can install react/http via: composer require react/http\n";
 }

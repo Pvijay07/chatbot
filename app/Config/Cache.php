@@ -195,4 +195,14 @@ class Cache extends BaseConfig
      * @var list<int>
      */
     public array $cacheStatusCodes = [];
+
+    public function __construct()
+    {
+        parent::__construct();
+
+        if (ENVIRONMENT === 'testing' || !is_dir($this->file['storePath']) || !is_writable($this->file['storePath'])) {
+            $this->handler = 'dummy';
+            $this->backupHandler = 'dummy';
+        }
+    }
 }
